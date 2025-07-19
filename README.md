@@ -24,6 +24,7 @@ filter, leaving enough headroom to avoid clipping.
 - `ffmpeg` for audio processing
 - `bc` for floating-point arithmetic
 - `jq` for JSON parsing
+- `ffprobe` for audio file analysis
 
 ## Usage
 

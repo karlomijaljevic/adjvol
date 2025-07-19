@@ -73,6 +73,10 @@ function f_check_dependencies {
   if ! command -v bc &> /dev/null; then
     f_error_exit "bc is not installed. Please install it to use this script."
   fi
+
+  if ! command -v ffprobe &> /dev/null; then
+    f_error_exit "ffprobe is not installed. Please install it to use this script."
+  fi
 }
 
 # Checks if the cache directory exists and is writable
