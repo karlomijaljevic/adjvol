@@ -17,19 +17,10 @@
 # ==================== DESCRIPTION OF PROGRAM ====================
 #
 # Use this script to adjust the volume of audio files in a directory
-# or a single audio file. It uses ffmpeg to analyze the audio files
-# and either normalize their volume levels or increase/decrease volume.
+# or a single audio file. It can either increase the volume of the audio
+# files to a target level (-1.0dB) or normalize the volume using the two phase
+# loudnorm normalization method.
 #
-# Usage: ./adjust-volume.sh <directory_or_file> <option>
-# <directory_or_file> - Path to the directory or file to adjust volume.
-# <option> - Optional, can be "1" to adjust the volume or "2" to
-#            normalize the volume by a fixed amount.
-#            If not provided, it defaults to adjustment.
-#
-# Necessary dependencies:
-# - ffmpeg
-# - jq
-# - bc
 
 # =========================== #
 # ========= GLOBALS ========= #
@@ -47,9 +38,14 @@ c_green="\e[1;32m"
 # ======== FUNCTIONS ======== #
 # =========================== #
 
+# Prints an error message in red.
+function error_message {
+  echo -e "${c_red}Error: $1${c_normal}" >&2
+}
+
 # Prints an error message and exits the script with a non-zero status.
 function error_exit {
-  echo -e "${c_red}Error: $1${c_normal}" >&2
+  error_message "$1"
   exit 1
 }
 
@@ -103,18 +99,40 @@ function f_check_parameters {
     error_exit "No path provided. Please provide a directory or file path."
   fi
 
-  if [[ ! "$g_option" =~ ^[1-2]$ ]]; then
-    error_exit "Invalid option provided. Use '1' for volume adjustment or '2' \
-    for normalization."
+  if [[ ! "$g_option" =~ ^[1-3]$ ]]; then
+    error_exit "Invalid option provided. Use '1' for volume adjustment, '2' \
+    for normalization and '3' for both where the lossy tracks are normalized \
+    and lossless tracks are volume adjusted."
   fi
 }
 
-# Extracts data from a single audio file using ffmpeg.
-function extract_data {
+# Checks if the provided file exists and is a valid audio file.
+# Prints an error message but does not exit if the file is invalid.
+function f_check_file {
   local file="$1"
-  local result=""
 
-  result="$(ffmpeg -y -i "$file" \
+  if [ ! -f "$file" ]; then
+    error_message "File does not exist: $file"
+    return 1
+  fi
+
+  if [[ ! "$file" =~ \.(mp3|wav|flac|ogg|aac|m4a)$ ]]; then
+    error_message "Unsupported file format: $file. Supported formats are: \
+    mp3, wav, flac, ogg, aac, m4a."
+    return 1
+  fi
+
+  return 0
+}
+
+# Normalizes the volume of a single audio file using ffmpeg.
+# It uses the loudnorm filter to apply normalization based on the
+# extracted data from the audio file.
+function normalize() {
+  local file="$1"
+  local data=""
+
+  data="$(ffmpeg -y -i "$file" \
     -nostdin \
     -hide_banner \
     -af loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json \
@@ -125,13 +143,11 @@ function extract_data {
           /}/ {if (flag) {brace=brace-1}; if (flag && brace==0) {exit}}
           ')"
 
-  echo "$result"
-}
+  if [ -z "$data" ]; then
+    error_message "Failed to extract loudnorm data from file: $file"
+    return 1
+  fi
 
-# Normalizes the volume of a single audio file using ffmpeg.
-function normalize() {
-  local file="$1"
-  local data="$2"
   local input_i=""
   local input_tp=""
   local input_lra=""
@@ -183,6 +199,12 @@ function f_increase_volume {
 
   gain="$(echo "-1.0 - ($max_volume)" | bc)"
 
+  # Check if the gain is only a decimal point (e.g. '.5') and add '0' if
+  # necessary
+  if [[ "$gain" =~ ^\.[0-9]+$ ]]; then
+    gain="0$gain"
+  fi
+
    if ! ffmpeg -y -i "$file" \
     -nostdin \
     -hide_banner \
@@ -195,96 +217,104 @@ function f_increase_volume {
   return 0
 }
 
-# Adjusts the volume of a single audio file using ffmpeg.
-function f_adjust_volume {
+# Checks if the file is a valid audio file and processes it based on the
+# selected option.
+function f_process_file {
   local file="$1"
-  local result=""
-
-  if [ "$g_option" -eq 1 ]; then
-    if ! f_increase_volume "$file"; then
-      return 1
-    fi
-  else
-    result="$(extract_data "$file")"
-
-    if [ -z "$result" ]; then
-      return 1
-    fi
-
-    if ! normalize "$file" "$result"; then
-      return 1
-    fi
-  fi
-
-  mv -f "$g_cache_dir/$(basename "$file")" "$file"
-}
-
-# Recursively normalizes the volume of audio files in the specified directory.
-function f_adjust_volume_recursively {
-  local original_ifs="$IFS"
   local option_text=""
 
   if [ "$g_option" -eq 1 ]; then
-    option_text="volume adjustment"
+    option_text="simple volume adjustment"
+  elif [ "$g_option" -eq 2 ]; then
+    option_text="two phase loudnorm normalization"
   else
-    option_text="normalization"
+    # TODO: Implement the option for both volume adjustment and normalization
+    option_text="both volume adjustment and normalization"
+    echo "Warning: Not yet implemented. Using volume adjustment instead."
+    g_option=1
   fi
 
+  if ! f_check_file "$file"; then
+    error_message "Invalid file: $file. Skipping..."
+    return 1
+  fi
+
+  echo "Processing file \"$file\" using $option_text..."
+
+  if [ "$g_option" -eq 1 ]; then
+    if ! f_increase_volume "$file"; then
+      echo "Failed to increase volume for file: $file"
+      return 1
+    fi
+  else
+    if ! normalize "$file"; then
+      error_message "Failed to normalize volume for file: $file"
+      return 1
+    fi
+  fi
+
+  if ! mv -f "$g_cache_dir/$(basename "$file")" "$file"; then
+    error_message "Failed to move processed file back to original location: $file"
+    return 1
+  fi
+
+  success_message "Adjusted volume for: $file"
+  return 0
+}
+
+# Recursively adjusts the volume of all audio files in a directory.
+function f_process_directory {
+  local original_ifs="$IFS"
+  local error_occurred=0
+
   while IFS= read -r -d '' x; do
-    if [[ ! -f "$x" ]]; then
+    if ! f_process_file "$x"; then
+      error_occurred=1
       continue
-    fi
-
-    if [[ ! "$x" =~ \.(mp3|wav|flac|ogg|aac|m4a)$ ]]; then
-      continue
-    fi
-
-    echo "Processing file \"$x\" using option $option_text..."
-
-    if ! f_adjust_volume "$x"; then
-      error_exit "Failed to adjust volume for file: $x"
-    else
-      success_message "Adjusted volume for: $x"
     fi
   done < <(find "$g_path" -type f -print0)
 
   IFS="$original_ifs"
-}
 
-# If the provided path is a directory, recursively adjust the volume of all
-# audio files in it.If the provided path is a file, adjust the volume of that
-# file.
-function f_main {
-  local option_text=""
-
-  if [ "$g_option" -eq 1 ]; then
-    option_text="volume adjustment"
-  else
-    option_text="normalization"
-  fi
-
-  if [ -d "$g_path" ]; then
-    f_adjust_volume_recursively
-  elif [ -f "$g_path" ]; then
-    echo "Processing file \"$g_path\" using option $option_text..."
-
-    if ! f_adjust_volume "$g_path"; then
-      error_exit "Failed to adjust volume for file: $g_path"
-    else
-      success_message "Adjusted volume for: $g_path"
-    fi
-  else
-    error_exit "Invalid path provided: $g_path. Please provide a valid \
-    directory or file path."
-  fi
+  return $error_occurred
 }
 
 # =========================== #
 # ========== MAIN =========== #
 # =========================== #
 
-f_check_dependencies
-f_check_parameters
-f_check_cache_dir
+# If the provided path is a directory, recursively adjust the volume of all
+# audio files in it.If the provided path is a file, adjust the volume of that
+# file.
+function f_main {
+  f_check_dependencies
+  f_check_parameters
+  f_check_cache_dir
+
+  local error_occurred=0
+
+  if [ -d "$g_path" ]; then
+    if ! f_process_directory "$g_path"; then
+      error_occurred=1
+    fi
+  elif [ -f "$g_path" ]; then
+    if ! f_process_file "$g_path"; then
+      error_occurred=1
+    fi
+  else
+    error_exit "Invalid path provided: $g_path. Please provide a valid \
+    directory or file path."
+  fi
+
+  if [ $error_occurred -eq 0 ]; then
+    success_message "All files processed successfully."
+  else
+    error_message "Some files could not be processed."
+  fi
+
+  f_clean_cache_dir
+
+  return $error_occurred
+}
+
 f_main
-f_clean_cache_dir
