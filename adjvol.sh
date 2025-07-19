@@ -26,6 +26,12 @@
 # ========= GLOBALS ========= #
 # =========================== #
 
+# Target peak level for volume adjustment.
+TARGET_PEAK="-1.0"
+
+# Target loudness level for normalization.
+TARGET_LOUDNESS="-12"
+
 g_path="$1"
 g_option="${2:-1}"
 g_cache_dir="$HOME/.cache/adjust-volume"
@@ -39,33 +45,33 @@ c_green="\e[1;32m"
 # =========================== #
 
 # Prints an error message in red.
-function error_message {
+function f_error_message {
   echo -e "${c_red}Error: $1${c_normal}" >&2
 }
 
 # Prints an error message and exits the script with a non-zero status.
-function error_exit {
-  error_message "$1"
+function f_error_exit {
+  f_error_message "$1"
   exit 1
 }
 
 # Prints a success message.
-function success_message {
+function f_success_message {
   echo -e "${c_green}$1${c_normal}"
 }
 
 # Checks if the required dependencies are installed
 function f_check_dependencies {
   if ! command -v ffmpeg &> /dev/null; then
-    error_exit "ffmpeg is not installed. Please install it to use this script."
+    f_error_exit "ffmpeg is not installed. Please install it to use this script."
   fi
 
   if ! command -v jq &> /dev/null; then
-    error_exit "jq is not installed. Please install it to use this script."
+    f_error_exit "jq is not installed. Please install it to use this script."
   fi
 
   if ! command -v bc &> /dev/null; then
-    error_exit "bc is not installed. Please install it to use this script."
+    f_error_exit "bc is not installed. Please install it to use this script."
   fi
 }
 
@@ -73,12 +79,12 @@ function f_check_dependencies {
 function f_check_cache_dir() {
   if [ ! -d "$g_cache_dir" ]; then
     if ! mkdir -p "$g_cache_dir"; then
-      error_exit "Failed to create cache directory: $g_cache_dir"
+      f_error_exit "Failed to create cache directory: $g_cache_dir"
     fi
   fi
 
   if [ ! -w "$g_cache_dir" ]; then
-    error_exit "Cache directory is not writable: $g_cache_dir"
+    f_error_exit "Cache directory is not writable: $g_cache_dir"
   fi
 }
 
@@ -86,24 +92,37 @@ function f_check_cache_dir() {
 function f_clean_cache_dir() {
   if [ -d "$g_cache_dir" ]; then
     if ! rm -rf "${g_cache_dir:?}"/*; then
-      error_exit "Failed to clean cache directory: $g_cache_dir"
+      f_error_exit "Failed to clean cache directory: $g_cache_dir"
     fi
   else
-    error_exit "Cache directory does not exist: $g_cache_dir"
+    f_error_exit "Cache directory does not exist: $g_cache_dir"
   fi
 }
 
 # Checks if the provided parameters are valid.
 function f_check_parameters {
   if [ -z "$g_path" ]; then
-    error_exit "No path provided. Please provide a directory or file path."
+    f_error_exit "No path provided. Please provide a directory or file path."
   fi
 
   if [[ ! "$g_option" =~ ^[1-3]$ ]]; then
-    error_exit "Invalid option provided. Use '1' for volume adjustment, '2' \
+    f_error_exit "Invalid option provided. Use '1' for volume adjustment, '2' \
     for normalization and '3' for both where the lossy tracks are normalized \
     and lossless tracks are volume adjusted."
   fi
+}
+
+# Gets the codec of the provided audio file using ffprobe.
+function f_get_file_codec() {
+  local file="$1"
+  local codec=""
+
+  codec="$(ffprobe -v error \
+    -show_entries stream=codec_name \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$file")"
+
+  echo "$codec"
 }
 
 # Checks if the provided file exists and is a valid audio file.
@@ -112,13 +131,13 @@ function f_check_file {
   local file="$1"
 
   if [ ! -f "$file" ]; then
-    error_message "File does not exist: $file"
+    f_error_message "File does not exist: $file"
     return 1
   fi
 
-  if [[ ! "$file" =~ \.(mp3|wav|flac|ogg|aac|m4a)$ ]]; then
-    error_message "Unsupported file format: $file. Supported formats are: \
-    mp3, wav, flac, ogg, aac, m4a."
+  if [[ ! "$file" =~ \.(mp3|wav|flac|ogg|aac|m4a|opus)$ ]]; then
+    f_error_message "Unsupported file format: $file. Supported formats are: \
+    mp3, wav, flac, ogg, aac, m4a, opus."
     return 1
   fi
 
@@ -144,7 +163,7 @@ function normalize() {
           ')"
 
   if [ -z "$data" ]; then
-    error_message "Failed to extract loudnorm data from file: $file"
+    f_error_message "Failed to extract loudnorm data from file: $file"
     return 1
   fi
 
@@ -160,7 +179,7 @@ function normalize() {
   input_thresh="$(echo "$data" | jq -r '.input_thresh')"
   target_offset="$(echo "$data" | jq -r '.target_offset')"
 
-  local loudnorm="I=-12:\
+  local loudnorm="I=$TARGET_LOUDNESS:\
     TP=-1.5:\
     LRA=20:\
     measured_I=$input_i:\
@@ -197,7 +216,7 @@ function f_increase_volume {
     | awk '{print $5}' \
     | sed 's/dB//')"
 
-  gain="$(echo "-1.0 - ($max_volume)" | bc)"
+  gain="$(echo "$TARGET_PEAK - ($max_volume)" | bc)"
 
   # Check if the gain is only a decimal point (e.g. '.5') and add '0' if
   # necessary
@@ -222,43 +241,49 @@ function f_increase_volume {
 function f_process_file {
   local file="$1"
   local option_text=""
+  local adj_option=1
 
   if [ "$g_option" -eq 1 ]; then
-    option_text="simple volume adjustment"
+    option_text="volume adjustment for lossless audio files"
+    adj_option=1
   elif [ "$g_option" -eq 2 ]; then
-    option_text="two phase loudnorm normalization"
+    option_text="two phase loudnorm normalization for lossy audio files"
+    adj_option=2
   else
-    # TODO: Implement the option for both volume adjustment and normalization
-    option_text="both volume adjustment and normalization"
-    echo "Warning: Not yet implemented. Using volume adjustment instead."
-    g_option=1
+    if [[ "$(f_get_file_codec "$file")" =~ ^(mp3|ogg|aac|m4a|opus)$ ]]; then
+      option_text="two phase loudnorm normalization for lossy audio files"
+      adj_option=2
+    else
+      option_text="volume adjustment for lossless audio files"
+      adj_option=1
+    fi
   fi
 
   if ! f_check_file "$file"; then
-    error_message "Invalid file: $file. Skipping..."
+    f_error_message "Invalid file: $file. Skipping..."
     return 1
   fi
 
   echo "Processing file \"$file\" using $option_text..."
 
-  if [ "$g_option" -eq 1 ]; then
+  if [ "$adj_option" -eq 1 ]; then
     if ! f_increase_volume "$file"; then
       echo "Failed to increase volume for file: $file"
       return 1
     fi
   else
     if ! normalize "$file"; then
-      error_message "Failed to normalize volume for file: $file"
+      f_error_message "Failed to normalize volume for file: $file"
       return 1
     fi
   fi
 
   if ! mv -f "$g_cache_dir/$(basename "$file")" "$file"; then
-    error_message "Failed to move processed file back to original location: $file"
+    f_error_message "Failed to move processed file back to original location: $file"
     return 1
   fi
 
-  success_message "Adjusted volume for: $file"
+  f_success_message "Adjusted volume for: $file"
   return 0
 }
 
@@ -302,14 +327,14 @@ function f_main {
       error_occurred=1
     fi
   else
-    error_exit "Invalid path provided: $g_path. Please provide a valid \
+    f_error_exit "Invalid path provided: $g_path. Please provide a valid \
     directory or file path."
   fi
 
   if [ $error_occurred -eq 0 ]; then
-    success_message "All files processed successfully."
+    f_success_message "All files processed successfully."
   else
-    error_message "Some files could not be processed."
+    f_error_message "Some files could not be processed."
   fi
 
   f_clean_cache_dir
