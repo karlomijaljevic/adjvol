@@ -44,8 +44,7 @@ bash adjvol.sh <directory_or_file> <option>
     which is the recommended option for lossy formats like MP3, AAC, or OGG.
   - `3`: Use the basic volume adjustment for lossless formats like FLAC 
     (equivalent to option `1` but does not change the loudness) and uses
-    loudness normalization for lossy formats like MP3, AAC, or OGG. **This
-    is still in development.**
+    loudness normalization for lossy formats like MP3, AAC, or OGG.
 
 If no option is provided, the script will default to `1`. Therefore, use with
 caution if you want to use the script with lossy formats. This was done to
