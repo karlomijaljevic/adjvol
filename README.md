@@ -6,7 +6,7 @@ recursively in a directory.
 If you wish to modify to what range the volume is adjusted (increased/lowered)
 to, you can change the `TARGET_PEAK` variable in the script. The same applies
 to the loudness normalization target, which can be changed in the script by
-modifying the `TARGET_LOUDNESS` variable, which is set to -12 LUFS by default.
+modifying the `TARGET_LOUDNESS` variable, which is set to -16 LUFS by default.
 
 ***Note:*** When changing the `TARGET_LOUDNESS` variable, ensure that you
 understand the implications of changing the loudness normalization target in
@@ -17,7 +17,7 @@ filter, leaving enough headroom to avoid clipping.
 ***Default values:***
 
 - `TARGET_PEAK`: -1.0 dB
-- `TARGET_LOUDNESS`: -12 LUFS
+- `TARGET_LOUDNESS`: -16 LUFS
 
 ## Requirements
 
@@ -41,27 +41,33 @@ bash adjvol.sh <directory_or_file> <option>
     which is the recommended option for lossless formats like FLAC, WAV, or
     AIFF. This option does not change the loudness of the audio file.
   - `2`: Uses loudness normalization targeting a loudness of -12 LUFS,
-    which is the recommended option for lossy formats like MP3, AAC, or OGG.
-  - `3`: Use the basic volume adjustment for lossless formats like FLAC 
-    (equivalent to option `1` but does not change the loudness) and uses
-    loudness normalization for lossy formats like MP3, AAC, or OGG.
+    which is the recommended option for lossy formats like MP3.
+  - `3`: Uses the basic volume adjustment for lossless formats like FLAC 
+    and uses loudness normalization for lossy formats like MP3.
 
-If no option is provided, the script will default to `1`. Therefore, use with
-caution if you want to use the script with lossy formats. This was done to
-ensure that the script does not change the loudness of quality audio files by
-default (e.g. FLAC, WAV).
+If no option is provided, the script will default to `3`.
 
 ## Recommended Usage
 
 For best results, it is recommended to use the script with the `2` option
 for loudness normalization for audio files which with lossy formats like
-MP3, AAC, or OGG. This will ensure that the audio files are adjusted to a
-consistent loudness level.
+MP3, AAC, OPUS, OGG, etc. This will ensure that the audio files are adjusted to
+a consistent loudness level of -16 LUFS.
 
 For lossless formats like FLAC, the `1` option is sufficient and will not
 change the loudness of the audio file, but only adjust the peak volume to -1dB.
 
+In case you want to adjust the volume of both lossy and lossless formats in
+the same directory, you can use the `3` option, which will apply the basic
+volume adjustment for lossless formats and loudness normalization for lossy
+formats. This is also the default option if no option is provided.
+
 ## Adjustment (Volume Increase) Philosophy/Reasoning
+
+I created this script to help me with adjusting the volume of audio files which
+when *"found"* on the internet, were more often than not, too quiet for my
+liking (usually taken from some *big-red-logo-white-letter* video/music playing
+website). Furthermore, they would usually be in lossy formats such as OPUS.
 
 The adjustment philosophy behind this script is to provide a simple and
 practical approach to volume adjustment across different audio formats,

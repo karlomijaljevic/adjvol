@@ -30,10 +30,10 @@
 TARGET_PEAK="-1.0"
 
 # Target loudness level for normalization.
-TARGET_LOUDNESS="-12"
+TARGET_LOUDNESS="-16"
 
 g_path="$1"
-g_option="${2:-1}"
+g_option="${2:-3}"
 g_cache_dir="$HOME/.cache/adjust-volume"
 
 c_normal="\e[0m"
@@ -184,7 +184,7 @@ function normalize() {
   target_offset="$(echo "$data" | jq -r '.target_offset')"
 
   local loudnorm="I=$TARGET_LOUDNESS:\
-    TP=-1.5:\
+    TP=-2:\
     LRA=20:\
     measured_I=$input_i:\
     measured_TP=$input_tp:\
