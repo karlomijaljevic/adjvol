@@ -86,6 +86,17 @@ function f_check_cache_dir() {
   fi
 }
 
+# Clean cache directory by removing all files in it.
+function f_clean_cache_dir() {
+  if [ -d "$g_cache_dir" ]; then
+    if ! rm -rf "${g_cache_dir:?}"/*; then
+      error_exit "Failed to clean cache directory: $g_cache_dir"
+    fi
+  else
+    error_exit "Cache directory does not exist: $g_cache_dir"
+  fi
+}
+
 # Checks if the provided parameters are valid.
 function f_check_parameters {
   if [ -z "$g_path" ]; then
@@ -170,7 +181,7 @@ function f_increase_volume {
     | awk '{print $5}' \
     | sed 's/dB//')"
 
-  gain=$(echo "-1.0 - ($max_volume)" | bc)
+  gain="$(echo "-1.0 - ($max_volume)" | bc)"
 
    if ! ffmpeg -y -i "$file" \
     -nostdin \
@@ -190,17 +201,19 @@ function f_adjust_volume {
   local result=""
 
   if [ "$g_option" -eq 1 ]; then
-    return $(f_increase_volume "$file")
-  fi
+    if ! f_increase_volume "$file"; then
+      return 1
+    fi
+  else
+    result="$(extract_data "$file")"
 
-  result="$(extract_data "$file")"
+    if [ -z "$result" ]; then
+      return 1
+    fi
 
-  if [ -z "$result" ]; then
-    return 1
-  fi
-
-  if ! normalize "$file" "$result"; then
-    return 1
+    if ! normalize "$file" "$result"; then
+      return 1
+    fi
   fi
 
   mv -f "$g_cache_dir/$(basename "$file")" "$file"
@@ -274,3 +287,4 @@ f_check_dependencies
 f_check_parameters
 f_check_cache_dir
 f_main
+f_clean_cache_dir
